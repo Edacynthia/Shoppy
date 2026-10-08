@@ -26,7 +26,7 @@ type AuthMode = "sign-in" | "create-account" | "reset-password";
 type AuthAction = "email" | "google" | "sign-out" | null;
 
 export const ProfileScreen: React.FC = () => {
-  const { user } = useCart();
+  const { user, syncStatus, syncMessage } = useCart();
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -138,9 +138,28 @@ export const ProfileScreen: React.FC = () => {
             <View style={styles.profileInfo}>
               <Text style={styles.title}>Your account</Text>
               <Text style={styles.emailText}>{user.email ?? "Signed in"}</Text>
-              <Text style={styles.statusBadge}>Synced with the website</Text>
+              <Text
+                style={[
+                  styles.statusBadge,
+                  syncStatus === "error" && styles.statusBadgeError,
+                  syncStatus === "syncing" && styles.statusBadgePending,
+                ]}
+              >
+                {syncStatus === "synced"
+                  ? "Cart synced across devices"
+                  : syncStatus === "syncing" || syncStatus === "loading"
+                    ? "Syncing your cart…"
+                    : "Cart not synced"}
+              </Text>
+              {!!syncMessage && (
+                <Text style={syncStatus === "error" ? styles.errorText : styles.infoDesc}>
+                  {syncMessage}
+                </Text>
+              )}
               <Text style={styles.infoDesc}>
-                Your shopping bag syncs across your phone and the website while you're signed in.
+                {syncStatus === "synced"
+                  ? "Your shopping bag syncs across your phone and the website while you're signed in."
+                  : "Your shopping bag is saved on this phone until account sync is available."}
               </Text>
               <TouchableOpacity
                 style={[styles.primaryButton, styles.signOutButton]}
@@ -330,6 +349,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginBottom: 16,
   },
+  statusBadgeError: { color: "#B91C1C", backgroundColor: "#FEE2E2" },
+  statusBadgePending: { color: "#92400E", backgroundColor: "#FEF3C7" },
   infoDesc: { textAlign: "center", color: "#78716C", fontSize: 14, lineHeight: 21, marginBottom: 24 },
   loginCard: {
     width: "100%",

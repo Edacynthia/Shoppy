@@ -1,7 +1,9 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { CartItem, CartLine, sampleProducts } from "../types/product";
 import { CartSyncService } from "../services/cartSync";
 import { supabase } from "../services/supabase";
+
+export type CartSyncStatus = "loading" | "local" | "syncing" | "synced" | "error";
 
 type CartContextType = {
   items: CartItem[];
@@ -14,6 +16,8 @@ type CartContextType = {
   clearCart: () => void;
   user: any;
   loading: boolean;
+  syncStatus: CartSyncStatus;
+  syncMessage: string;
 };
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -22,6 +26,10 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [items, setItems] = useState<CartItem[]>([]);
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [syncStatus, setSyncStatus] = useState<CartSyncStatus>("loading");
+  const [syncMessage, setSyncMessage] = useState("");
+  const itemsRef = useRef<CartItem[]>([]);
+  const writeRevision = useRef(0);
 
   // Monitor auth state
   useEffect(() => {
@@ -41,49 +49,77 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Load and synchronize cart
   useEffect(() => {
     let unsubscribeRealtime: (() => void) | undefined;
+    let active = true;
+    const revision = ++writeRevision.current;
 
     async function initCart() {
       setLoading(true);
-      const loaded = await CartSyncService.loadCart(user?.id);
-      setItems(loaded);
+      setSyncStatus(user?.id ? "syncing" : "local");
+      setSyncMessage("");
+      const result = await CartSyncService.loadCart(user?.id);
+      if (!active) return;
+
+      itemsRef.current = result.items;
+      setItems(result.items);
+      setSyncStatus(result.status);
+      setSyncMessage(result.message ?? "");
       setLoading(false);
 
-      // If user is authenticated, subscribe to live web changes!
       if (user?.id) {
         unsubscribeRealtime = CartSyncService.subscribeToCartUpdates(user.id, (updatedItems) => {
+          itemsRef.current = updatedItems;
           setItems(updatedItems);
+        }, (status, message) => {
+          if (!active) return;
+          setSyncStatus(status);
+          setSyncMessage(message ?? "");
         });
       }
     }
 
-    initCart();
+    void initCart().catch(() => {
+      if (!active) return;
+      setLoading(false);
+      setSyncStatus("error");
+      setSyncMessage("Your cart could not be loaded. Please try again.");
+    });
 
     return () => {
+      active = false;
+      if (writeRevision.current === revision) writeRevision.current += 1;
       if (unsubscribeRealtime) unsubscribeRealtime();
     };
   }, [user]);
 
-  // Save changes to storage / Supabase
   const persistChanges = (newItems: CartItem[]) => {
+    itemsRef.current = newItems;
     setItems(newItems);
-    CartSyncService.saveCart(newItems, user?.id);
+    const revision = ++writeRevision.current;
+    setSyncStatus(user?.id ? "syncing" : "local");
+    setSyncMessage("");
+    void CartSyncService.saveCart(newItems, user?.id).then((result) => {
+      if (writeRevision.current !== revision) return;
+      setSyncStatus(result.status);
+      setSyncMessage(result.message ?? "");
+    });
   };
 
   const addToCart = (productId: string) => {
-    const existing = items.find((i) => i.productId === productId);
+    const currentItems = itemsRef.current;
+    const existing = currentItems.find((i) => i.productId === productId);
     let updated: CartItem[];
     if (existing) {
-      updated = items.map((i) =>
+      updated = currentItems.map((i) =>
         i.productId === productId ? { ...i, quantity: i.quantity + 1 } : i
       );
     } else {
-      updated = [...items, { productId, quantity: 1 }];
+      updated = [...currentItems, { productId, quantity: 1 }];
     }
     persistChanges(updated);
   };
 
   const removeFromCart = (productId: string) => {
-    const updated = items.filter((i) => i.productId !== productId);
+    const updated = itemsRef.current.filter((i) => i.productId !== productId);
     persistChanges(updated);
   };
 
@@ -92,7 +128,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       removeFromCart(productId);
       return;
     }
-    const updated = items.map((i) =>
+    const updated = itemsRef.current.map((i) =>
       i.productId === productId ? { ...i, quantity } : i
     );
     persistChanges(updated);
@@ -127,6 +163,8 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         clearCart,
         user,
         loading,
+        syncStatus,
+        syncMessage,
       }}
     >
       {children}
