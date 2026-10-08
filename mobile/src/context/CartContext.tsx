@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { CartItem, CartLine, Product, sampleProducts } from "../types/product";
+import { CartItem, CartLine, sampleProducts } from "../types/product";
 import { CartSyncService } from "../services/cartSync";
 import { supabase } from "../services/supabase";
 

@@ -43,7 +43,9 @@ export class CartSyncService {
     // Always keep a local copy for offline support
     try {
       await AsyncStorage.setItem(LOCAL_CART_KEY, JSON.stringify(items));
-    } catch {}
+    } catch {
+      // Ignore local storage write errors
+    }
 
     // If authenticated, sync with user_carts so website updates in real time
     if (userId) {
