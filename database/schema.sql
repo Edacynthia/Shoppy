@@ -95,6 +95,51 @@ alter table public.orders alter column currency set default 'ngn';
 create index if not exists orders_created_at_idx on public.orders (created_at desc);
 create index if not exists orders_buyer_email_idx on public.orders (buyer_email);
 
+-- User carts: syncs across web and mobile for authenticated shoppers.
+-- The mobile app reads/writes this table directly via the anon key and
+-- subscribes to realtime updates so a cart change on one device shows up
+-- instantly on every other signed-in device.
+create table if not exists public.user_carts (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  items jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication where pubname = 'supabase_realtime'
+  ) then
+    raise exception 'The supabase_realtime publication is missing; enable Realtime before applying this schema.';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'user_carts'
+  ) then
+    alter publication supabase_realtime add table public.user_carts;
+  end if;
+end $$;
+
+alter table public.user_carts enable row level security;
+grant select, insert, update, delete on public.user_carts to authenticated;
+
+drop policy if exists "Users manage their own cart" on public.user_carts;
+create policy "Users manage their own cart"
+  on public.user_carts for all
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Users can read their own cart" on public.user_carts;
+create policy "Users can read their own cart"
+  on public.user_carts for select
+  to authenticated
+  using (auth.uid() = user_id);
+
 alter table public.products enable row level security;
 alter table public.guest_carts enable row level security;
 alter table public.orders enable row level security;

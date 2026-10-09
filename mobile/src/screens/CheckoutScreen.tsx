@@ -15,7 +15,7 @@ import { formatNgn } from "../utils/format";
 import { ArrowLeft, CheckCircle2 } from "lucide-react-native";
 
 export const CheckoutScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
-  const { subtotal, cartLines, clearCart, user } = useCart();
+  const { subtotal, cartLines, user } = useCart();
   const [email, setEmail] = useState(user?.email || "");
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
@@ -26,7 +26,7 @@ export const CheckoutScreen: React.FC<{ navigation: any }> = ({ navigation }) =>
   const deliveryFee = 0; // Free delivery
   const total = subtotal + deliveryFee;
 
-  const handlePaystackPayment = async () => {
+  const handleDemoCheckout = async () => {
     if (!email || !name || !address || !city) {
       Alert.alert("Missing Details", "Please fill in all delivery information.");
       return;
@@ -38,7 +38,6 @@ export const CheckoutScreen: React.FC<{ navigation: any }> = ({ navigation }) =>
     setTimeout(() => {
       setProcessing(false);
       setOrderComplete(true);
-      clearCart();
     }, 2000);
   };
 
@@ -47,9 +46,9 @@ export const CheckoutScreen: React.FC<{ navigation: any }> = ({ navigation }) =>
       <SafeAreaView style={styles.container}>
         <View style={styles.successContainer}>
           <CheckCircle2 size={64} color="#15803D" />
-          <Text style={styles.successTitle}>Order Placed Successfully!</Text>
+          <Text style={styles.successTitle}>Demo order preview complete</Text>
           <Text style={styles.successSubtitle}>
-            A receipt and shipping confirmation will be sent to {email}.
+            No payment was processed and no order was placed. Live payments are available through the web checkout.
           </Text>
           <TouchableOpacity
             style={styles.homeBtn}
@@ -129,13 +128,13 @@ export const CheckoutScreen: React.FC<{ navigation: any }> = ({ navigation }) =>
       <View style={styles.footer}>
         <TouchableOpacity
           style={styles.payBtn}
-          onPress={handlePaystackPayment}
+          onPress={handleDemoCheckout}
           disabled={processing}
         >
           {processing ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
-            <Text style={styles.payBtnText}>Pay with Paystack ({formatNgn(total)})</Text>
+            <Text style={styles.payBtnText}>Preview checkout ({formatNgn(total)})</Text>
           )}
         </TouchableOpacity>
       </View>

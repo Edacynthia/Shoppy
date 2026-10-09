@@ -1,21 +1,45 @@
 # Fieldwork Supply
 
-A server-rendered storefront built with Next.js for Vercel. Supabase stores products, guest carts, accounts, and orders. Paystack collects payments. Mailgun sends payment-confirmation emails. Google sign-in runs through Supabase Auth.
+A server-rendered storefront built with Next.js for Vercel. Supabase stores products, guest carts, authenticated carts shared with the mobile app, accounts, and orders. Paystack collects payments. Mailgun sends payment-confirmation emails. Google sign-in runs through Supabase Auth.
 
 The included Fieldwork products, names, prices, images, NGN currency, and free-delivery fee are examples. Replace them with your shop details before accepting real payments.
 
 ## Run Locally
 
-From this folder (`Stage 2`):
+From the project root in Git Bash:
 
 ```bash
-npm install
+cd ~/Documents/Zedu/shoppy
+npm ci
 npm run dev
 ```
 
 Open `http://localhost:3000`. The sample storefront works before provider credentials are added. Checkout will remain unavailable until the required Paystack and Supabase settings are present.
 
 Copy `.env.example` to `.env.local` and fill it in as you set up each provider. Do not commit `.env.local` or paste secret keys into chat. The `.env.example` file contains placeholders only.
+
+## Run the Expo App
+
+In a second terminal:
+
+```bash
+cd ~/Documents/Zedu/shoppy/mobile
+npm ci
+npx expo start --lan --port 8081
+```
+
+Open Expo Go on a phone on the same Wi-Fi network and scan the current development-server QR code. Keep the terminal running; use the newly displayed QR after restarting Expo or changing networks. To recover from a stale Metro cache, stop Expo with Ctrl+C and restart with `npx expo start --lan --clear --port 8081`.
+
+The mobile app uses the same Supabase project as the web app; put its project URL and **anon/publishable key only** in `mobile/.env` or `mobile/.env.local`:
+
+```env
+EXPO_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_KEY
+```
+
+Never put the Supabase service-role key or payment-provider secrets in the mobile app. The mobile checkout is a demo preview and does not process payments; live checkout is available on the web app. Expo Go is sufficient for the current dependencies; an Android SDK is only needed to run an Android emulator or build/install a native app locally.
+
+The website and mobile app share signed-in carts through the `public.user_carts` table. For an existing Supabase project, run [`database/migrations/20261008_user_carts.sql`](database/migrations/20261008_user_carts.sql) once in the Supabase SQL Editor. This creates the per-user cart table, restricts access to each user's own row, and enables Realtime updates. Both apps must use the same Supabase project and the same signed-in account.
 
 ## 1. Supabase Database
 

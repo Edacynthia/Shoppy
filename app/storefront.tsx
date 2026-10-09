@@ -14,11 +14,40 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { createBrowserClient } from "@supabase/ssr";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Product } from "@/lib/catalog";
 
 type CartLine = { productId: string; quantity: number };
 type BagLine = { product: Product; quantity: number };
+
+function restoreBagItems(items: unknown, products: Product[]): BagLine[] {
+  if (!Array.isArray(items)) return [];
+
+  return items.flatMap((item) => {
+    if (
+      typeof item !== "object" ||
+      item === null ||
+      !("productId" in item) ||
+      !("quantity" in item) ||
+      typeof item.productId !== "string" ||
+      typeof item.quantity !== "number" ||
+      !Number.isInteger(item.quantity) ||
+      item.quantity < 1
+    ) {
+      return [];
+    }
+
+    const product = products.find((entry) => entry.id === item.productId);
+    return product ? [{ product, quantity: item.quantity }] : [];
+  });
+}
+
+function serializeBag(bag: BagLine[]): CartLine[] {
+  return bag.map(({ product, quantity }) => ({
+    productId: product.id,
+    quantity,
+  }));
+}
 
 const categories = ["All objects", "Tableware", "Soft goods", "Small things"];
 const filters: Record<string, string[]> = {
@@ -36,6 +65,16 @@ function formatPrice(amount: number, currency: string) {
   }).format(amount / 100);
 }
 
+function accountCartErrorMessage(error: { code?: string; message: string }) {
+  if (error.code === "PGRST205" || error.message.includes("Could not find the table")) {
+    return "Shared cart sync is not set up yet. Apply database/schema.sql in your Supabase project.";
+  }
+  if (error.code === "42501" || error.message.toLowerCase().includes("row-level security")) {
+    return "Supabase blocked access to your account cart. Check the user_carts row-level security policies.";
+  }
+  return "Your account bag could not be synced. Please try again.";
+}
+
 export default function Storefront({ products, currency }: { products: Product[]; currency: string }) {
   const [category, setCategory] = useState(categories[0]);
   const [bag, setBag] = useState<BagLine[]>([]);
@@ -43,6 +82,9 @@ export default function Storefront({ products, currency }: { products: Product[]
   const [cartReady, setCartReady] = useState(false);
   const [notice, setNotice] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [userId, setUserId] = useState("");
+  const [syncedUserId, setSyncedUserId] = useState<string | null>(null);
+  const skipNextServerWrite = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -51,13 +93,8 @@ export default function Storefront({ products, currency }: { products: Product[]
       try {
         const response = await fetch("/api/cart", { cache: "no-store" });
         if (response.ok) {
-          const data = (await response.json()) as { items?: CartLine[] };
-          const restored = (data.items ?? []).flatMap((line) => {
-            const product = products.find((item) => item.id === line.productId);
-            return product && line.quantity > 0
-              ? [{ product, quantity: line.quantity }]
-              : [];
-          });
+          const data = (await response.json()) as { items?: unknown };
+          const restored = restoreBagItems(data.items, products);
           if (active && restored.length) {
             setBag(restored);
             setCartReady(true);
@@ -70,13 +107,7 @@ export default function Storefront({ products, currency }: { products: Product[]
 
       try {
         const stored = window.localStorage.getItem("fieldwork-bag");
-        const lines = stored ? (JSON.parse(stored) as CartLine[]) : [];
-        const restored = lines.flatMap((line) => {
-          const product = products.find((item) => item.id === line.productId);
-          return product && line.quantity > 0
-            ? [{ product, quantity: line.quantity }]
-            : [];
-        });
+        const restored = restoreBagItems(stored ? JSON.parse(stored) : [], products);
         if (active) setBag(restored);
       } catch {
         if (active) setBag([]);
@@ -92,12 +123,9 @@ export default function Storefront({ products, currency }: { products: Product[]
   }, [products]);
 
   useEffect(() => {
-    if (!cartReady) return;
+    if (!cartReady || (userId && syncedUserId !== userId)) return;
 
-    const lines = bag.map(({ product, quantity }) => ({
-      productId: product.id,
-      quantity,
-    }));
+    const lines = serializeBag(bag);
 
     try {
       window.localStorage.setItem("fieldwork-bag", JSON.stringify(lines));
@@ -105,12 +133,46 @@ export default function Storefront({ products, currency }: { products: Product[]
       // The server-side cart remains available when browser storage is disabled.
     }
 
+    if (skipNextServerWrite.current) {
+      skipNextServerWrite.current = false;
+      return;
+    }
+
+    if (userId) {
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key) return;
+
+      const supabase = createBrowserClient(url, key);
+      async function persistAccountBag() {
+        const { error } = await supabase.from("user_carts").upsert({
+          user_id: userId,
+          items: lines,
+          updated_at: new Date().toISOString(),
+        })
+        if (error) {
+          setNotice(accountCartErrorMessage(error));
+        }
+      }
+
+      void persistAccountBag().catch(() => {
+        setNotice("Your account bag could not be synced.");
+      });
+      return;
+    }
+
     void fetch("/api/cart", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ items: lines }),
-    }).catch(() => undefined);
-  }, [bag, cartReady]);
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Cart persistence failed.");
+      })
+      .catch(() => {
+        setNotice("Your guest bag could not be synced.");
+      });
+  }, [bag, cartReady, syncedUserId, userId]);
 
   useEffect(() => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -120,11 +182,21 @@ export default function Storefront({ products, currency }: { products: Product[]
     const supabase = createBrowserClient(url, key);
     let active = true;
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (active) setUserEmail(session?.user.email ?? "");
+      if (active) {
+        const nextUserId = session?.user.id ?? "";
+        setUserEmail(session?.user.email ?? "");
+        setUserId(nextUserId);
+        setSyncedUserId((current) => current === nextUserId ? current : null);
+      }
     });
 
     void supabase.auth.getUser().then(({ data, error }) => {
-      if (active) setUserEmail(error ? "" : data.user?.email ?? "");
+      if (active) {
+        const nextUserId = error ? "" : data.user?.id ?? "";
+        setUserEmail(error ? "" : data.user?.email ?? "");
+        setUserId(nextUserId);
+        setSyncedUserId((current) => current === nextUserId ? current : null);
+      }
     });
 
     return () => {
@@ -132,6 +204,79 @@ export default function Storefront({ products, currency }: { products: Product[]
       subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!cartReady || !userId) return;
+
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!url || !key) return;
+
+    const supabase = createBrowserClient(url, key);
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | undefined;
+
+    async function loadAccountBag() {
+      const { data, error } = await supabase
+        .from("user_carts")
+        .select("items")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!active) return;
+      if (error) {
+        setNotice(accountCartErrorMessage(error));
+        return;
+      }
+
+      if (data) {
+        const restored = restoreBagItems(data.items, products);
+        skipNextServerWrite.current = true;
+        setBag(restored);
+      }
+      setSyncedUserId(userId);
+
+      channel = supabase
+        .channel(`user-carts:${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "user_carts",
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (!active) return;
+            const items =
+              payload.eventType === "DELETE"
+                ? []
+                : (payload.new as { items?: unknown }).items;
+            if (!Array.isArray(items)) return;
+
+            skipNextServerWrite.current = true;
+            setBag(restoreBagItems(items, products));
+          },
+        )
+        .subscribe((status) => {
+          if (active && (status === "CHANNEL_ERROR" || status === "TIMED_OUT")) {
+            setNotice("Live account bag updates are unavailable.");
+          }
+        });
+    }
+
+    void loadAccountBag()
+      .catch(() => {
+        if (active) {
+          setNotice("Your account bag could not be loaded.");
+        }
+      });
+
+    return () => {
+      active = false;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [cartReady, products, userId]);
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
